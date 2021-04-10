@@ -160,7 +160,9 @@ if __name__ == '__main__':
 
     # Init asr model from configs
     model = init_asr_model(configs)
-    print(model)
+    num_parameters = sum(torch.numel(parameter) for parameter in model.parameters())
+    print('============参数量=============：', num_parameters / 1000000)
+    # print(model)
 
     # !!!IMPORTANT!!!
     # Try to export the model by script, if fails, we should refine

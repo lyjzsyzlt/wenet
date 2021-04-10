@@ -8,13 +8,14 @@
 # Use this to control how many gpu you use, It's 1-gpu training if you specify
 # just 1gpu, otherwise it's is multiple gpu training based on DDP in pytorch
 export CUDA_VISIBLE_DEVICES="0,1,2,3"
+python=/home/lvyongjie/anaconda3/envs/wenet/bin/python
 stage=4 # start from 0 if you need to start from data preparation
 stop_stage=6
 # data
-data=/export/data/asr-data/OpenSLR/33/
+data=/home/lvyongjie/corpus/aishell/
 data_url=www.openslr.org/resources/33
 
-nj=16
+nj=32
 feat_dir=fbank
 dict=data/dict/lang_char.txt
 
@@ -23,11 +24,11 @@ train_set=train_sp
 # 1. conf/train_transformer.yaml: Standard transformer
 # 2. conf/train_conformer.yaml: Standard conformer
 # 3. conf/train_unified_conformer.yaml: Unified dynamic chunk causal conformer
-train_config=conf/train_conformer.yaml
+train_config=conf/train_unified_conformer_student.yaml
 cmvn=true
 compress=true
 fbank_conf=conf/fbank.conf
-dir=exp/fbank_sp
+dir=exp/fbank_sp_student_dynamic_batch20000
 checkpoint=
 
 # use average_checkpoint will get better result
@@ -94,7 +95,6 @@ if [ ${stage} -le 3 ] && [ ${stop_stage} -ge 3 ]; then
             $feat_dir/$x ${dict} > $feat_dir/$x/format.data
     done
 fi
-
 if [ ${stage} -le 4 ] && [ ${stop_stage} -ge 4 ]; then
     # Training
     mkdir -p $dir
@@ -102,6 +102,12 @@ if [ ${stage} -le 4 ] && [ ${stop_stage} -ge 4 ]; then
     rm -f $INIT_FILE # delete old one before starting
     init_method=file://$(readlink -f $INIT_FILE)
     echo "$0: init method is $init_method"
+    # backup the code for the current experiment
+    mkdir -p $dir/code
+    cp -r wenet $dir/code
+    cp -r tools $dir/code
+    cp run.sh $dir/code
+
     num_gpus=$(echo $CUDA_VISIBLE_DEVICES | awk -F "," '{print NF}')
     # Use "nccl" if it works, otherwise use "gloo"
     dist_backend="nccl"
@@ -111,10 +117,11 @@ if [ ${stage} -le 4 ] && [ ${stop_stage} -ge 4 ]; then
     # train.py will write $train_config to $dir/train.yaml with model input
     # and output dimension, train.yaml will be used for inference or model
     # export later
+
     for ((i = 0; i < $num_gpus; ++i)); do
     {
         gpu_id=$(echo $CUDA_VISIBLE_DEVICES | cut -d',' -f$[$i+1])
-        python wenet/bin/train.py --gpu $gpu_id \
+        $python wenet/bin/train.py --gpu $gpu_id \
             --config $train_config \
             --train_data $feat_dir/$train_set/format.data \
             --cv_data $feat_dir/dev/format.data \
@@ -124,21 +131,23 @@ if [ ${stage} -le 4 ] && [ ${stop_stage} -ge 4 ]; then
             --ddp.world_size $num_gpus \
             --ddp.rank $i \
             --ddp.dist_backend $dist_backend \
-            --num_workers 2 \
+            --num_workers 4 \
             $cmvn_opts
     } &
     done
     wait
 fi
 
+
 if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
     # Test model, please specify the model you want to test by --checkpoint
     # TODO, Add model average here
     mkdir -p $dir/test
     if [ ${average_checkpoint} == true ]; then
+        average_num=10
         decode_checkpoint=$dir/avg_${average_num}.pt
         echo "do model average and final checkpoint is $decode_checkpoint"
-        python wenet/bin/average_model.py \
+        $python wenet/bin/average_model.py \
             --dst_model $decode_checkpoint \
             --src_path $dir  \
             --num ${average_num} \
@@ -146,13 +155,16 @@ if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
     fi
     # Specify decoding_chunk_size if it's a unified dynamic chunk trained model
     # -1 for full chunk
-    decoding_chunk_size=
+    decoding_chunk_size=16
     ctc_weight=0.5
+#    decode_modes="ctc_greedy_search ctc_prefix_beam_search attention attention_rescoring"
+    decode_modes="attention_rescoring"
+    recog_set="test"
     for mode in ${decode_modes}; do
     {
-        test_dir=$dir/test_${mode}
+        test_dir=$dir/results/${recog_set}/${mode}_${decoding_chunk_size}
         mkdir -p $test_dir
-        python wenet/bin/recognize.py --gpu 0 \
+        $python wenet/bin/recognize.py --gpu 1 \
             --mode $mode \
             --config $dir/train.yaml \
             --test_data $feat_dir/test/format.data \
@@ -164,19 +176,23 @@ if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
             --ctc_weight $ctc_weight \
             --result_file $test_dir/text \
             ${decoding_chunk_size:+--decoding_chunk_size $decoding_chunk_size}
-         python tools/compute-wer.py --char=1 --v=1 \
-            $feat_dir/test/text $test_dir/text > $test_dir/wer
-    } &
-    done
-    wait
+         $python tools/compute-wer.py --char=1 --v=1 \
+            $feat_dir/${recog_set}/text $test_dir/text > $test_dir/wer
 
+         decoding_time=`cat $test_dir/decoding_time |awk '{sum+=$2}END{print sum}'`
+         duration=`cat data/${recog_set}/utt2dur|awk '{sum+=$2}END{print sum}'`
+         echo -e "\naverage rtf="`awk 'BEGIN{printf "%.4f\n",'${decoding_time}'/'${duration}'}'`
+         echo -e "time costs="`awk 'BEGIN{printf "%.4f\n",'${decoding_time}'/60}'`
+    }
+    done
 fi
 
 if [ ${stage} -le 6 ] && [ ${stop_stage} -ge 6 ]; then
     # Export the best model you want
-    python wenet/bin/export_jit.py \
+    $python wenet/bin/export_jit.py \
         --config $dir/train.yaml \
         --checkpoint $dir/avg_${average_num}.pt \
-        --output_file $dir/final.zip
+        --output_file $dir/final.zip \
+        --output_quant_file $dir/final_qint8.zip
 fi
 

@@ -36,3 +36,9 @@ data
 raw_wav
 tensorboard
 **/*build*
+fbank*
+tmp
+runtime/server/x86/models/
+*log*
+examples/aishell/s1/steps
+examples/aishell/s1/utils

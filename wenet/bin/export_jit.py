@@ -29,7 +29,7 @@ if __name__ == '__main__':
     parser.add_argument('--checkpoint', required=True, help='checkpoint model')
     parser.add_argument('--output_file', required=True, help='output file')
     parser.add_argument('--output_quant_file',
-                        default=None,
+                        default="",
                         help='output quantized model file')
     args = parser.parse_args()
     # No need gpu for model export
@@ -38,7 +38,7 @@ if __name__ == '__main__':
     with open(args.config, 'r') as fin:
         configs = yaml.load(fin, Loader=yaml.FullLoader)
     model = init_asr_model(configs)
-    print(model)
+    # print(model)
 
     load_checkpoint(model, args.checkpoint)
     # Export jit torch script model
@@ -52,7 +52,7 @@ if __name__ == '__main__':
         quantized_model = torch.quantization.quantize_dynamic(
             model, {torch.nn.Linear}, dtype=torch.qint8
         )
-        print(quantized_model)
+        # print(quantized_model)
         script_quant_model = torch.jit.script(quantized_model)
         script_quant_model.save(args.output_quant_file)
         print('Export quantized model successfully, '

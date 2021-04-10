@@ -19,6 +19,7 @@ import copy
 import logging
 import os
 import sys
+import time
 
 import torch
 import yaml
@@ -133,8 +134,19 @@ if __name__ == '__main__':
     model = model.to(device)
 
     model.eval()
+    # 读取每个音频的时长
+    duration={}
+    with open('data/test/utt2dur', 'r', encoding='utf-8') as ff:
+        for line in ff.readlines():
+            line = line.strip()
+            key, dur=line.split(' ')
+            duration[key] = dur
+    path = '/'.join(args.result_file.split('/')[:-1]) + "/decoding_time"
+    decode_time = open(path, 'w', encoding='utf-8')
+
     with torch.no_grad(), open(args.result_file, 'w') as fout:
         for batch_idx, batch in enumerate(test_data_loader):
+            start = time.time()
             keys, feats, target, feats_lengths, target_lengths = batch
             feats = feats.to(device)
             target = target.to(device)
@@ -180,11 +192,25 @@ if __name__ == '__main__':
                     ctc_weight=args.ctc_weight,
                     simulate_streaming=args.simulate_streaming)
                 hyps = [hyp]
+            end = time.time()
+
+
+
             for i, key in enumerate(keys):
                 content = ''
                 for w in hyps[i]:
                     if w == eos:
                         break
                     content += char_dict[w]
-                logging.info('{} {}'.format(key, content))
+                ref = ''
+                for w in target[i]:
+                    w=w.detach().item()
+                    if w==eos:
+                        break
+                    ref += char_dict[w]
+                logging.info('({}/{}) {} {}'.format(batch_idx, len(test_data_loader), key, content))
+                logging.info('({}/{}) {} {}'.format(batch_idx, len(test_data_loader), key, ref))
+                logging.info('Decoding time: {} RTF: {}\n'.format(str(end-start), str((end-start)/float(duration[key]))))
                 fout.write('{} {}\n'.format(key, content))
+                decode_time.write('{} {}\n'.format(key, str(end-start)))
+    decode_time.close()

@@ -1,4 +1,4 @@
-KALDI_ROOT=/export/maryland/binbinzhang/kaldi
+KALDI_ROOT=/home/lvyongjie/kaldi
 
 [ -f $KALDI_ROOT/tools/env.sh ] && . $KALDI_ROOT/tools/env.sh
 export PATH=$PWD/utils/:$KALDI_ROOT/tools/openfst/bin:$KALDI_ROOT/tools/sctk/bin:$PWD:$PATH
@@ -12,4 +12,4 @@ export LC_ALL=C
 
 # NOTE(kan-bayashi): Use UTF-8 in Python to avoid UnicodeDecodeError when LC_ALL=C
 export PYTHONIOENCODING=UTF-8
-export PYTHONPATH=../../:$PYTHONPATH
+export PYTHONPATH=../../../:$PYTHONPATH
