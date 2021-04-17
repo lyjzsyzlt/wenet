@@ -11,6 +11,7 @@ from torch.nn.utils import clip_grad_norm_
 class Executor:
     def __init__(self):
         self.step = 0
+        self.log = None
 
     def train(self, model, optimizer, scheduler, data_loader, device, writer,
               args):
@@ -74,6 +75,7 @@ class Executor:
                 if loss_ctc is not None:
                     log_str += 'loss_ctc {:.6f} '.format(loss_ctc.item())
                 log_str += 'lr {:.8f} rank {}'.format(lr, rank)
+                self.log.info(log_str)
                 logging.debug(log_str)
 
     def cv(self, model, data_loader, device, args):
@@ -109,6 +111,7 @@ class Executor:
                         log_str += 'loss_ctc {:.6f} '.format(loss_ctc.item())
                     log_str += 'history loss {:.6f}'.format(
                         total_loss / num_seen_utts)
+                    self.log.info(log_str)
                     logging.debug(log_str)
 
         return total_loss, num_seen_utts
