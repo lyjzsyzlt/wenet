@@ -11,12 +11,13 @@ from torch.nn.utils import clip_grad_norm_
 class Executor:
     def __init__(self):
         self.step = 0
+        self.log = None
 
     def train(self, model, optimizer, scheduler, data_loader, device, writer,
               args):
         ''' Train one epoch
         '''
-        model.train()
+        # model.train()
         clip = args.get('grad_clip', 50.0)
         log_interval = args.get('log_interval', 10)
         rank = args.get('rank', 0)
@@ -74,12 +75,13 @@ class Executor:
                 if loss_ctc is not None:
                     log_str += 'loss_ctc {:.6f} '.format(loss_ctc.item())
                 log_str += 'lr {:.8f} rank {}'.format(lr, rank)
+                self.log.info(log_str)
                 logging.debug(log_str)
 
     def cv(self, model, data_loader, device, args):
         ''' Cross validation on
         '''
-        model.eval()
+        # model.eval()
         log_interval = args.get('log_interval', 10)
         # in order to avoid division by 0
         num_seen_utts = 1
@@ -99,7 +101,8 @@ class Executor:
                                                  target_lengths)
                 if torch.isfinite(loss):
                     num_seen_utts += num_utts
-                    total_loss += loss.item() * num_utts
+                    # total_loss += loss.item() * num_utts
+                    total_loss += loss_att.item() * num_utts
                 if batch_idx % log_interval == 0:
                     log_str = 'CV Batch {}/{} loss {:.6f} '.format(
                         batch_idx, num_total_batch, loss.item())
@@ -109,6 +112,7 @@ class Executor:
                         log_str += 'loss_ctc {:.6f} '.format(loss_ctc.item())
                     log_str += 'history loss {:.6f}'.format(
                         total_loss / num_seen_utts)
+                    self.log.info(log_str)
                     logging.debug(log_str)
 
         return total_loss, num_seen_utts
