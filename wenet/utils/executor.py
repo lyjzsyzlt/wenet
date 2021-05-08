@@ -98,7 +98,7 @@ class Executor:
                 if num_utts == 0:
                     continue
                 loss, loss_att, loss_ctc = model(feats, feats_lengths, target,
-                                                 target_lengths)
+                                                 target_lengths, cv=True)
                 if torch.isfinite(loss):
                     num_seen_utts += num_utts
                     # total_loss += loss.item() * num_utts
