@@ -26,7 +26,7 @@ if __name__ == '__main__':
                         type=int,
                         help='min epoch used for averaging model')
     parser.add_argument('--max_epoch',
-                        default=65536,  # Big enough
+                        default=9999,  # Big enough
                         type=int,
                         help='max epoch used for averaging model')
 
@@ -61,18 +61,36 @@ if __name__ == '__main__':
     avg = None
     num = args.num
     assert num == len(path_list)
+    params_dict = {}
     for path in path_list:
         print('Processing {}'.format(path))
         states = torch.load(path, map_location=torch.device('cpu'))
         if avg is None:
             avg = states
-        else:
-            for k in avg.keys():
-                avg[k] += states[k]
-    # average
-    for k in avg.keys():
-        if avg[k] is not None:
-            # pytorch 1.6 use true_divide instead of /=
-            avg[k] = torch.true_divide(avg[k], num)
+        for k in avg.keys():
+            p = states[k]
+            if k not in params_dict:
+                params_dict[k]=p.clone()
+            else:
+                params_dict[k]+=p
+    for k, v in params_dict.items():
+        avg[k][:] = v
+        avg[k].div_(num)
     print('Saving to {}'.format(args.dst_model))
     torch.save(avg, args.dst_model)
+
+    # for path in path_list:
+    #     print('Processing {}'.format(path))
+    #     states = torch.load(path, map_location=torch.device('cpu'))
+    #     if avg is None:
+    #         avg = states
+    #     else:
+    #         for k in avg.keys():
+    #             avg[k] += states[k]
+    # # average
+    # for k in avg.keys():
+    #     if avg[k] is not None:
+    #         # pytorch 1.6 use true_divide instead of /=
+    #         avg[k] = torch.true_divide(avg[k], num)
+    # print('Saving to {}'.format(args.dst_model))
+    # torch.save(avg, args.dst_model)
