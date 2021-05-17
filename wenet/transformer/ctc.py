@@ -58,6 +58,9 @@ class CTC(torch.nn.Module):
         """
         return F.log_softmax(self.ctc_lo(hs_pad), dim=2)
 
+    def get_logits(self, hs_pad: torch.Tensor) -> torch.Tensor:
+        return self.ctc_lo(hs_pad)
+
     def argmax(self, hs_pad: torch.Tensor) -> torch.Tensor:
         """argmax of frame activations
 
