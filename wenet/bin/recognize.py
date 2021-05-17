@@ -28,6 +28,7 @@ from torch.utils.data import DataLoader
 from wenet.dataset.dataset import AudioDataset, CollateFunc
 from wenet.transformer.asr_model import init_asr_model
 from wenet.utils.checkpoint import load_checkpoint
+from wenet.utils.common import IGNORE_ID
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='recognize with your model')
@@ -55,7 +56,7 @@ if __name__ == '__main__':
     parser.add_argument('--mode',
                         choices=[
                             'attention', 'ctc_greedy_search',
-                            'ctc_prefix_beam_search', 'attention_rescoring'],
+                            'ctc_prefix_beam_search', 'attention_rescoring', 'attn_ctc', 'wfst_based_decoding'],
                         default='attention',
                         help='decoding mode')
     parser.add_argument('--ctc_weight',
@@ -121,14 +122,34 @@ if __name__ == '__main__':
 
     # Load dict
     char_dict = {}
+    char_list=[]
     with open(args.dict, 'r') as fin:
         for line in fin:
             arr = line.strip().split()
             assert len(arr) == 2
             char_dict[int(arr[1])] = arr[0]
+            char_list.append(arr[0])
     eos = len(char_dict) - 1
 
+    # Load HLG  for wfst-based decoding
+    if args.mode == 'wfst_based_decoding':
+        d = torch.load('data/graph/HLG.pt')
+        HLG = k2.Fsa.from_dict(d)
+        HLG = HLG.to(device)
+        HLG.aux_labels = k2.ragged.remove_values_eq(HLG.aux_labels, 0)
+        HLG.requires_grad_(False)
+        words_dict = {}
+        with open('data/graph/words.txt', 'r') as fin:
+            for line in fin:
+                arr = line.strip().split()
+                assert len(arr) == 2
+                words_dict[int(arr[1])] = arr[0]
+
     load_checkpoint(model, args.checkpoint)
+    # model = torch.quantization.quantize_dynamic(
+    #     model, {torch.nn.Linear}, dtype=torch.qint8
+    # )
+    # torch.save(model.state_dict(), "int8.pt")
     use_cuda = args.gpu >= 0 and torch.cuda.is_available()
     device = torch.device('cuda' if use_cuda else 'cpu')
     model = model.to(device)
@@ -183,6 +204,17 @@ if __name__ == '__main__':
                 hyps = [hyp]
             elif args.mode == 'attention_rescoring':
                 assert (feats.size(0) == 1)
+                # hyps = model.attention_rescoring_batch(
+                #     feats,
+                #     feats_lengths,
+                #     args.beam_size,
+                #     decoding_chunk_size=args.decoding_chunk_size,
+                #     num_decoding_left_chunks=args.num_decoding_left_chunks,
+                #     ctc_weight=args.ctc_weight,
+                #     simulate_streaming=args.simulate_streaming,
+                #     char_list=char_list)
+                # print(hyps)
+                # exit(0)
                 hyp = model.attention_rescoring(
                     feats,
                     feats_lengths,
@@ -192,9 +224,20 @@ if __name__ == '__main__':
                     ctc_weight=args.ctc_weight,
                     simulate_streaming=args.simulate_streaming)
                 hyps = [hyp]
+            elif args.mode == 'attn_ctc':
+                assert (feats.size(0) == 1)
+                hyp = model.attn_ctc(
+                    feats,
+                    feats_lengths,
+                    args.beam_size,
+                    decoding_chunk_size=args.decoding_chunk_size,
+                    num_decoding_left_chunks=args.num_decoding_left_chunks,
+                    simulate_streaming=args.simulate_streaming,
+                    sos=len(char_dict)-1,
+                    char_list=char_list
+                )
+                hyps = [hyp]
             end = time.time()
-
-
 
             for i, key in enumerate(keys):
                 content = ''
@@ -205,11 +248,11 @@ if __name__ == '__main__':
                 ref = ''
                 for w in target[i]:
                     w=w.detach().item()
-                    if w==eos:
+                    if w==eos or w==IGNORE_ID:  # for attention decoding
                         break
                     ref += char_dict[w]
-                logging.info('({}/{}) {} {}'.format(batch_idx, len(test_data_loader), key, content))
-                logging.info('({}/{}) {} {}'.format(batch_idx, len(test_data_loader), key, ref))
+                logging.info('({}/{}) {} {}'.format(batch_idx*args.batch_size + i, len(test_data_loader)*args.batch_size, key, content))
+                logging.info('({}/{}) {} {}'.format(batch_idx*args.batch_size + i, len(test_data_loader)*args.batch_size, key, ref))
                 logging.info('Decoding time: {} RTF: {}\n'.format(str(end-start), str((end-start)/float(duration[key]))))
                 fout.write('{} {}\n'.format(key, content))
                 decode_time.write('{} {}\n'.format(key, str(end-start)))
