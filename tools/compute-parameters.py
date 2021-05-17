@@ -4,10 +4,10 @@ import torch
 import yaml
 
 from wenet.transformer.asr_model import init_asr_model
+from wenet.utils.checkpoint import save_checkpoint
 
 if __name__ == '__main__':
-    print(torch.softmax(torch.FloatTensor(range(12)), dim=0))
-    with open('../examples/aishell/s1/conf/train_unified_conformer_kd.yaml', 'r') as fin:
+    with open('../examples/aishell/s1/conf/train_unified_conformer.yaml', 'r') as fin:
         configs = yaml.load(fin, Loader=yaml.FullLoader)
     configs['cmvn_file'] = '../examples/aishell/s1/fbank/train_sp/global_cmvn'
     configs['is_json_cmvn'] = False
@@ -21,3 +21,4 @@ if __name__ == '__main__':
     model = init_asr_model(configs)
     num_parameters = sum(torch.numel(parameter) for parameter in model.parameters())
     print('============参数量=============：', num_parameters / 1000000)
+    save_checkpoint(model, 'x.pt')
