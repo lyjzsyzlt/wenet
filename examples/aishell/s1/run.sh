@@ -9,8 +9,8 @@
 # just 1gpu, otherwise it's is multiple gpu training based on DDP in pytorch
 export CUDA_VISIBLE_DEVICES="0,1,2,3"
 python=/home/lvyongjie/anaconda3/envs/wenet/bin/python
-stage=4 # start from 0 if you need to start from data preparation
-stop_stage=6
+stage=5 # start from 0 if you need to start from data preparation
+stop_stage=5
 # data
 data=/home/lvyongjie/corpus/aishell/
 data_url=www.openslr.org/resources/33
@@ -25,11 +25,43 @@ train_set=train_sp
 # 2. conf/train_conformer.yaml: Standard conformer
 # 3. conf/train_unified_conformer.yaml: Unified dynamic chunk causal conformer
 train_config=conf/train_unified_conformer_student.yaml
+dir=exp/fbank_sp+task_loss #_student_dynamic_batch20000+task_loss
+dir=exp/fbank_sp_student_dynamic_batch20000 # student模型baseline
+dir=exp/fbank_sp_student_dynamic_batch20000+encoder_task_loss_1 # student模型encoder部分+task loss
+#dir=exp/fbank_sp_student_dynamic_batch20000+task_loss # student模型decoder部分加task loss
+#dir=exp/fbank_sp_student_dynamic_batch20000+encoder_task_loss+decoder_task_loss # student模型encoder，decoder都+task loss
+
+#train_config=conf/train_unified_conformer.yaml
+dir=exp/fbank_sp_dynamic_batch20000+encoder_task_loss1 # teacher模型encoder部分+task loss
+
+train_config=conf/train_unified_conformer_kd.yaml
+dir=exp/kd/encoder_pkd
+dir=exp/kd/encoder_pkd_0.2
+dir=exp/kd/encoder_mlfd_dot_0.1_0.05_block_attention # 分块进行attention
+dir=exp/kd/encoder_mlfd_dot_0.1_block_attention_v2 # encoder最后后一层直接对应
+dir=exp/kd/encoder_mlfd_dot_0.2_block_attention_v2+encoder_0.4_ckd # encoder最后后一层直接对应
+dir=exp/kd/encoder_mlfd_dot_0.2_block_attention+decoder_mlfd_dot_0.01_block_attention # encoder, decoder都是用mlfd
+# dir=exp/kd/encoder_mlfd_dot_0.2_block_attention+decoder_mlfd_dot_0.05_block_attention # encoder, decoder都是用mlfd
+dir=exp/kd/encoder_mlfd_dot_0.2_block_attention_v2+decoder_task_loss
+#dir=exp/kd/encoder_mlfd_dot_0.2_block_attention_v2+encoder_task_loss
+dir=exp/kd/encoder_mlfd_dot_0.2_block_attention_v2+baselin_pretrained # 使用baseline的模型初始化参数
+dir=exp/kd/encoder_mlfd_dot_0.2_block_attention_v2+decoder_sharing # decoder两层共享参数
+dir=exp/kd/encoder_mlfd_dot_0.2_block_attention_v2+teacher_encoder_init # 使用teacher encoder中部分层来初始化
+dir=exp/kd/encoder_mlfd_dot_0.2_block_attention_v2+teacher_encoder_init_first-K # 使用teacher encoder中前K层来初始化
+dir=exp/kd/encoder_mlfd_dot_0.2_block_attention_v3 # PKD确定的层，往上的所有层attention
+dir=exp/kd/encoder_mlfd_dot_0.2_block_attention_v2+static_batch  # 使用static batch训练
+#dir=exp/fbank_sp+task_loss
+#dir=exp/fbank_sp
+#dir=exp/fbank_sp_student_dynamic_batch20000+encoder_task_loss
+## transformer模型加task loss
+#train_config=conf/train_transformer.yaml
+#dir=exp/fbank_sp_transformer+task_loss
+
+
+fbank_conf=conf/fbank.conf
 cmvn=true
 compress=true
-fbank_conf=conf/fbank.conf
-dir=exp/fbank_sp_student_dynamic_batch20000
-checkpoint=
+checkpoint= #exp/fbank_sp/avg_10.pt
 
 # use average_checkpoint will get better result
 average_checkpoint=true
@@ -95,7 +127,18 @@ if [ ${stage} -le 3 ] && [ ${stop_stage} -ge 3 ]; then
             $feat_dir/$x ${dict} > $feat_dir/$x/format.data
     done
 fi
+
 if [ ${stage} -le 4 ] && [ ${stop_stage} -ge 4 ]; then
+    # 防止已经训练过的结构被覆盖
+    if [ -d "$dir" ];then
+        echo "Warning: the $dir exists!!!"
+        read -p "Please input Y to continue..." flag
+        if [[ $flag == "Y" ]];then
+            echo "continue..."
+        else
+            exit 1
+        fi
+    fi
     # Training
     mkdir -p $dir
     INIT_FILE=$dir/ddp_init
@@ -104,8 +147,8 @@ if [ ${stage} -le 4 ] && [ ${stop_stage} -ge 4 ]; then
     echo "$0: init method is $init_method"
     # backup the code for the current experiment
     mkdir -p $dir/code
-    cp -r wenet $dir/code
-    cp -r tools $dir/code
+    cp -r wenet/ $dir/code
+    cp -r tools/ $dir/code
     cp run.sh $dir/code
 
     num_gpus=$(echo $CUDA_VISIBLE_DEVICES | awk -F "," '{print NF}')
@@ -123,6 +166,7 @@ if [ ${stage} -le 4 ] && [ ${stop_stage} -ge 4 ]; then
         gpu_id=$(echo $CUDA_VISIBLE_DEVICES | cut -d',' -f$[$i+1])
         $python wenet/bin/train.py --gpu $gpu_id \
             --config $train_config \
+            --log_path $dir/train.log \
             --train_data $feat_dir/$train_set/format.data \
             --cv_data $feat_dir/dev/format.data \
             ${checkpoint:+--checkpoint $checkpoint} \
@@ -132,12 +176,12 @@ if [ ${stage} -le 4 ] && [ ${stop_stage} -ge 4 ]; then
             --ddp.rank $i \
             --ddp.dist_backend $dist_backend \
             --num_workers 4 \
+            --seed 777 \
             $cmvn_opts
-    } &
+    }&
     done
     wait
 fi
-
 
 if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
     # Test model, please specify the model you want to test by --checkpoint
@@ -153,29 +197,31 @@ if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
             --num ${average_num} \
             --val_best
     fi
+#    decode_checkpoint=$dir/13.pt
     # Specify decoding_chunk_size if it's a unified dynamic chunk trained model
     # -1 for full chunk
     decoding_chunk_size=16
     ctc_weight=0.5
-#    decode_modes="ctc_greedy_search ctc_prefix_beam_search attention attention_rescoring"
-    decode_modes="attention_rescoring"
+#    decode_modes="ctc_greedy_search ctc_prefix_beam_search attention attention_rescoring attn_ctc"
+    decode_modes="attention"
     recog_set="test"
     for mode in ${decode_modes}; do
     {
-        test_dir=$dir/results/${recog_set}/${mode}_${decoding_chunk_size}
+        test_dir=$dir/results/${recog_set}/${mode}_${decoding_chunk_size}_1
         mkdir -p $test_dir
-        $python wenet/bin/recognize.py --gpu 1 \
+        $python wenet/bin/recognize.py --gpu 0 \
             --mode $mode \
             --config $dir/train.yaml \
             --test_data $feat_dir/test/format.data \
             --checkpoint $decode_checkpoint \
             --beam_size 10 \
-            --batch_size 1 \
+            --batch_size 24 \
             --penalty 0.0 \
             --dict $dict \
             --ctc_weight $ctc_weight \
             --result_file $test_dir/text \
             ${decoding_chunk_size:+--decoding_chunk_size $decoding_chunk_size}
+         echo -e "\n"
          $python tools/compute-wer.py --char=1 --v=1 \
             $feat_dir/${recog_set}/text $test_dir/text > $test_dir/wer
 
@@ -183,6 +229,7 @@ if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
          duration=`cat data/${recog_set}/utt2dur|awk '{sum+=$2}END{print sum}'`
          echo -e "\naverage rtf="`awk 'BEGIN{printf "%.4f\n",'${decoding_time}'/'${duration}'}'`
          echo -e "time costs="`awk 'BEGIN{printf "%.4f\n",'${decoding_time}'/60}'`
+         echo -e "$dir WER="`grep "Overall*" $test_dir/wer`
     }
     done
 fi
