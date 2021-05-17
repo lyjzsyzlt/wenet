@@ -24,6 +24,93 @@ def load_checkpoint(model: torch.nn.Module, path: str) -> dict:
             configs = yaml.load(fin, Loader=yaml.FullLoader)
     return configs
 
+def load_part_params(model: torch.nn.Module, path: str) -> dict:
+    if torch.cuda.is_available():
+        logging.info('Checkpoint: loading from checkpoint %s for GPU' % path)
+        checkpoint = torch.load(path)
+    else:
+        logging.info('Checkpoint: loading from checkpoint %s for CPU' % path)
+        checkpoint = torch.load(path, map_location='cpu')
+
+    keys = ['encoder.encoders.' + str(i) for i in [0, 4, 7, 11]]
+    # filter_keys = ['encoder.encoders.' + str(i) + '.' for i in range(12) if i not in [0, 4, 7, 11]]
+    filter_keys = ['encoder.encoders.' + str(i) + '.' for i in range(12) if i not in [0,1,2,3]]
+    print(filter_keys)
+
+    params = {}
+    for k, v in checkpoint.items():
+        if k.startswith('decoder') or k.startswith(tuple(filter_keys)):
+            continue
+        params[k] = v
+    print(len(params.keys()))
+    params_new = {}
+    for k, v in params.items():
+        for i, x in enumerate(keys):
+            if k.startswith(x):
+                k = '.'.join(k.split('.')[0:2]) + '.' + str(i) + '.' + '.'.join(k.split('.')[3:])
+                params_new[k] = v
+                break
+        params_new[k] = v
+        # print(k, v.shape)
+    print(len(params_new.keys()))
+
+    model_dict = model.state_dict()
+    for k, v in model_dict.items():
+        if k in params_new.keys() and v.size() == params_new[k].size():
+            model_dict[k] = params_new[k]
+        if k in params_new.keys() and v.size() != params_new[k].size():
+            assert len(v.shape) == len(params_new[k].shape)
+            if len(v.shape) == 1:
+                l1 = v.shape[0]
+                l2 = params_new[k].shape[0]
+                model_dict[k] = params_new[k][::l2 // l1]
+            if len(v.shape) == 2:
+                if v.shape[0] == params_new[k].shape[0]:
+                    l1 = v.shape[1]
+                    l2 = params_new[k].shape[1]
+                    model_dict[k] = params_new[k][:, ::l2 // l1]
+                if v.shape[1] == params_new[k].shape[1]:
+                    l1 = v.shape[0]
+                    l2 = params_new[k].shape[0]
+                    model_dict[k] = params_new[k][::l2 // l1, :]
+    model.load_state_dict(model_dict)
+    return {}
+
+# def load_part_params(model: torch.nn.Module, path: str) -> dict:
+#     if torch.cuda.is_available():
+#         logging.info('Checkpoint: loading from checkpoint %s for GPU' % path)
+#         checkpoint = torch.load(path)
+#     else:
+#         logging.info('Checkpoint: loading from checkpoint %s for CPU' % path)
+#         checkpoint = torch.load(path, map_location='cpu')
+#
+#     keys = ['encoder.encoders.' + str(i) for i in [0, 4, 7, 11]]
+#     filter_keys = ['encoder.encoders.' + str(i) + '.' for i in range(12) if i not in [0, 4, 7, 11]]
+#     print(filter_keys)
+#
+#     params = {}
+#     for k, v in checkpoint.items():
+#         if k.startswith('decoder') or k.startswith(tuple(filter_keys)) or 'feed_forward' in k:
+#             continue
+#         params[k] = v
+#     print(len(params.keys()))
+#     params_new = {}
+#     for k, v in params.items():
+#         for i, x in enumerate(keys):
+#             if k.startswith(x):
+#                 k = '.'.join(k.split('.')[0:2]) + '.' + str(i) + '.' + '.'.join(k.split('.')[3:])
+#                 params_new[k] = v
+#                 break
+#         params_new[k] = v
+#         # print(k, v.shape)
+#     print(len(params_new.keys()))
+#
+#     model_dict = model.state_dict()
+#     for k, v in model_dict.items():
+#         if k in params_new.keys() and v.size() == params_new[k].size():
+#             model_dict[k] = params_new[k]
+#     model.load_state_dict(model_dict)
+#     return {}
 
 def save_checkpoint(model: torch.nn.Module, path: str, infos=None):
     '''
