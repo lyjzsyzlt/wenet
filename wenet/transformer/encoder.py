@@ -123,7 +123,7 @@ class BaseEncoder(torch.nn.Module):
         xs_lens: torch.Tensor,
         decoding_chunk_size: int = 0,
         num_decoding_left_chunks: int = -1,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> Tuple[List[torch.Tensor], torch.Tensor]:
         """Embed positions in tensor.
 
         Args:
@@ -151,14 +151,18 @@ class BaseEncoder(torch.nn.Module):
                                               decoding_chunk_size,
                                               self.static_chunk_size,
                                               num_decoding_left_chunks)
+        enc_outputs=[]
         for layer in self.encoders:
             xs, chunk_masks, _ = layer(xs, chunk_masks, pos_emb, mask_pad)
-        if self.normalize_before:
-            xs = self.after_norm(xs)
+            if self.normalize_before:
+                enc_outputs.append(self.after_norm(xs))
+            else:
+                enc_outputs.append(xs)
+        return enc_outputs, masks
         # Here we assume the mask is not changed in encoder layers, so just
         # return the masks before encoder layers, and the masks will be used
         # for cross attention with decoder later
-        return xs, masks
+
 
     def forward_chunk(
         self,
@@ -328,12 +332,17 @@ class TransformerEncoder(BaseEncoder):
         use_dynamic_chunk: bool = False,
         global_cmvn: torch.nn.Module = None,
         use_dynamic_left_chunk: bool = False,
+        task_driven_loss: bool = False,
+        kd: bool = False
     ):
         """ Construct TransformerEncoder
 
         See Encoder for the meaning of each parameter.
         """
         assert check_argument_types()
+        self.kd = kd
+        self.task_driven_loss = task_driven_loss
+        self.num_blocks = num_blocks
         super().__init__(input_size, output_size, attention_heads,
                          linear_units, num_blocks, dropout_rate,
                          positional_dropout_rate, attention_dropout_rate,
@@ -379,6 +388,8 @@ class ConformerEncoder(BaseEncoder):
         cnn_module_kernel: int = 15,
         causal: bool = False,
         cnn_module_norm: str = "batch_norm",
+        task_driven_loss: bool = False,
+        kd: bool = False
     ):
         """Construct ConformerEncoder
 
@@ -397,6 +408,9 @@ class ConformerEncoder(BaseEncoder):
             causal (bool): whether to use causal convolution or not.
         """
         assert check_argument_types()
+        self.kd = kd
+        self.task_driven_loss = task_driven_loss
+        self.num_blocks = num_blocks
         super().__init__(input_size, output_size, attention_heads,
                          linear_units, num_blocks, dropout_rate,
                          positional_dropout_rate, attention_dropout_rate,

@@ -49,8 +49,13 @@ class TransformerDecoder(torch.nn.Module):
         use_output_layer: bool = True,
         normalize_before: bool = True,
         concat_after: bool = False,
+        task_driven_loss: bool = False,
+        kd: bool = False
     ):
 
+        self.kd = kd
+        self.task_driven_loss = task_driven_loss
+        self.num_blocks = num_blocks
         assert check_argument_types()
         super().__init__()
         attention_dim = encoder_output_size
@@ -67,7 +72,11 @@ class TransformerDecoder(torch.nn.Module):
         self.normalize_before = normalize_before
         self.after_norm = torch.nn.LayerNorm(attention_dim, eps=1e-12)
         self.use_output_layer = use_output_layer
-        self.output_layer = torch.nn.Linear(attention_dim, vocab_size)
+
+        if self.task_driven_loss:
+            self.output_layers = torch.nn.ModuleList([torch.nn.Linear(attention_dim, vocab_size) for _ in range(num_blocks)])
+        else:
+            self.output_layer = torch.nn.Linear(attention_dim, vocab_size)
 
         self.decoders = torch.nn.ModuleList([
             DecoderLayer(
@@ -90,7 +99,7 @@ class TransformerDecoder(torch.nn.Module):
         memory_mask: torch.Tensor,
         ys_in_pad: torch.Tensor,
         ys_in_lens: torch.Tensor,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> Tuple[List[torch.Tensor], torch.Tensor, List[torch.Tensor]]:
         """Forward decoder.
 
         Args:
@@ -114,16 +123,34 @@ class TransformerDecoder(torch.nn.Module):
         tgt_mask = tgt_mask & m
 
         x, _ = self.embed(tgt)
-        for layer in self.decoders:
-            x, tgt_mask, memory, memory_mask = layer(x, tgt_mask, memory,
-                                                     memory_mask)
-        if self.normalize_before:
-            x = self.after_norm(x)
-        if self.use_output_layer:
-            x = self.output_layer(x)
+
+        dec_outputs=[]
+        if self.task_driven_loss:
+            logits_list=[]
+            for i, layer in enumerate(self.decoders):
+                x, tgt_mask, memory, memory_mask = layer(x, tgt_mask, memory,
+                                                         memory_mask)
+                xx = x
+                if self.normalize_before:
+                    xx = self.after_norm(xx)
+                dec_outputs.append(xx)
+                logits_list.append(self.output_layers[i](xx))
+        else:
+            for layer in self.decoders:
+                x, tgt_mask, memory, memory_mask = layer(x, tgt_mask, memory,
+                                                         memory_mask)
+                if self.normalize_before:
+                    dec_outputs.append(self.after_norm(x))
+                else:
+                    dec_outputs.append(x)
+            if self.normalize_before:
+                x = self.after_norm(x)
+            if self.use_output_layer:
+                x = self.output_layer(x)
+            logits_list = [x]
 
         olens = tgt_mask.sum(1)
-        return x, olens
+        return logits_list, olens, dec_outputs
 
     def forward_one_step(
         self,
@@ -166,6 +193,8 @@ class TransformerDecoder(torch.nn.Module):
             y = self.after_norm(x[:, -1])
         else:
             y = x[:, -1]
-        if self.use_output_layer:
+        if self.task_driven_loss:
+            y = torch.log_softmax(self.output_layers[-1](y), dim=-1)
+        else:
             y = torch.log_softmax(self.output_layer(y), dim=-1)
         return y, new_cache
