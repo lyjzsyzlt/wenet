@@ -73,7 +73,6 @@ class KD(nn.Module):
             elif self.kd_config['method'] == 'MLFD':
                 if self.kd_config['encoder']['kd']:
                     index = [[0, 1, 2, 3], [4, 5, 6, 7], [8, 9, 10], [11]]
-                    # index = [list(range(12)), list(range(4,12)), list(range(8, 12)), [11]]
                     loss_mlfd_e = self.MLFD(encoder_out_s, encoder_out_t, index, encoder_mask, attn_type='dot')
                     alpha = 0.2
                     # 这算的是encoder ctc出来的logits

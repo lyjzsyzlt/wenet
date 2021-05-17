@@ -18,7 +18,9 @@ import argparse
 import copy
 import logging
 import os
+import random
 
+import numpy as np
 import torch
 import torch.distributed as dist
 import torch.optim as optim
@@ -27,15 +29,16 @@ from tensorboardX import SummaryWriter
 from torch.utils.data import DataLoader
 
 from wenet.dataset.dataset import AudioDataset, CollateFunc
-from wenet.transformer.asr_model import init_asr_model
-from wenet.utils.checkpoint import load_checkpoint, save_checkpoint
+from wenet.transformer.knowledge_distillation import KD
+from wenet.utils.checkpoint import load_checkpoint, save_checkpoint, load_part_params
+from wenet.utils.common import init_logger
 from wenet.utils.executor import Executor
 from wenet.utils.scheduler import WarmupLR
-
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='training your network')
     parser.add_argument('--config', required=True, help='config file')
+    parser.add_argument('--log_path', required=True, help='log file')
     parser.add_argument('--train_data', required=True, help='train data file')
     parser.add_argument('--cv_data', required=True, help='cv data file')
     parser.add_argument('--gpu',
@@ -76,14 +79,26 @@ if __name__ == '__main__':
                         default=False,
                         help='Use pinned memory buffers used for reading')
     parser.add_argument('--cmvn', default=None, help='global cmvn file')
+    parser.add_argument('--config_teacher', default=None, help='the config file of the teacher model')
+    parser.add_argument('--teacher_model', default=None, help='the pretrained teacher model')
+    parser.add_argument('--seed', default=777, help='the seed', type=int)
 
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.DEBUG,
                         format='%(asctime)s %(levelname)s %(message)s')
+    log = init_logger(args.log_path)
     os.environ['CUDA_VISIBLE_DEVICES'] = str(args.gpu)
-    # Set random seed
-    torch.manual_seed(777)
+
+    # 设置随机种子，保证每次运行得到的结果一致
+    torch.cuda.manual_seed(args.seed)
+    torch.cuda.manual_seed_all(args.seed)  # if you are using multi-GPU.
+    np.random.seed(args.seed)  # Numpy module.
+    random.seed(args.seed)  # Python random module.
+    torch.manual_seed(args.seed)
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = True
+
     print(args)
     with open(args.config, 'r') as fin:
         configs = yaml.load(fin, Loader=yaml.FullLoader)
@@ -158,23 +173,39 @@ if __name__ == '__main__':
             data = yaml.dump(configs)
             fout.write(data)
 
+    teacher=configs['kd_conf']['teacher']
+    if teacher:
+        with open(os.path.join(teacher, 'train.yaml'), 'r') as fin:
+            configs_teacher = yaml.load(fin, Loader=yaml.FullLoader)
+        log.info("using teacher model %s"%(teacher+'/train.yaml'))
+    else:
+        configs_teacher=None
+
     # Init asr model from configs
-    model = init_asr_model(configs)
-    num_parameters = sum(torch.numel(parameter) for parameter in model.parameters())
-    print('============参数量=============：', num_parameters / 1000000)
-    # print(model)
+    # model = init_asr_model(configs)
+    model = KD(configs, configs_teacher=configs_teacher)
+
+    num_parameters = sum(torch.numel(parameter) for parameter in model.student.parameters())
+    log.info('============参数量=============：%f'%(num_parameters / 1000000))
 
     # !!!IMPORTANT!!!
     # Try to export the model by script, if fails, we should refine
     # the code to satisfy the script export requirements
-    script_model = torch.jit.script(model)
-    script_model.save(os.path.join(args.model_dir, 'init.zip'))
+    # script_model = torch.jit.script(model)
+    # script_model.save(os.path.join(args.model_dir, 'init.zip'))
     executor = Executor()
     # If specify checkpoint, load some info from checkpoint
     if args.checkpoint is not None:
-        infos = load_checkpoint(model, args.checkpoint)
+        # infos = load_checkpoint(model.student, args.checkpoint)
+        infos = load_part_params(model.student, args.checkpoint)
     else:
         infos = {}
+    if teacher is not None:
+        load_checkpoint(model.teacher, os.path.join(teacher, 'avg_10.pt'))
+        log.info("load teacher model %s successfully!"%(teacher+'/avg_10.pt'))
+    else:
+        log.error("no pretrained teacher model!!!")
+
     start_epoch = infos.get('epoch', -1) + 1
     cv_loss = infos.get('cv_loss', 0.0)
     step = infos.get('step', -1)
@@ -206,10 +237,11 @@ if __name__ == '__main__':
     configs['is_distributed'] = distributed
     if start_epoch == 0 and args.rank == 0:
         save_model_path = os.path.join(model_dir, 'init.pt')
-        save_checkpoint(model, save_model_path)
+        save_checkpoint(model.module.student if distributed else model.student, save_model_path)
 
     # Start training loop
     executor.step = step
+    executor.log = log  # 保存训练的log文件
     scheduler.set_step(step)
     for epoch in range(start_epoch, num_epochs):
         if distributed:
@@ -236,7 +268,7 @@ if __name__ == '__main__':
         if args.rank == 0:
             save_model_path = os.path.join(model_dir, '{}.pt'.format(epoch))
             save_checkpoint(
-                model, save_model_path, {
+                model.module.student if distributed else model.student, save_model_path, {
                     'epoch': epoch,
                     'lr': lr,
                     'cv_loss': cv_loss,
