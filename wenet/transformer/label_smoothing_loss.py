@@ -55,7 +55,7 @@ class LabelSmoothingLoss(nn.Module):
         self.size = size
         self.normalize_length = normalize_length
 
-    def forward(self, x: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, target: torch.Tensor, weights: torch.Tensor) -> torch.Tensor:
         """Compute loss between x and target.
 
         The model outputs and data labels tensors are flatten to
@@ -66,6 +66,7 @@ class LabelSmoothingLoss(nn.Module):
             x (torch.Tensor): prediction (batch, seqlen, class)
             target (torch.Tensor):
                 target signal masked with self.padding_id (batch, seqlen)
+            weights (torch.Tensor): decoder每一层loss的权重，如果只有最后一层有loss， 则weight=torch.FloatTensor([1.0])
         Returns:
             loss (torch.Tensor) : The KL loss, scalar float value
         """
@@ -83,4 +84,10 @@ class LabelSmoothingLoss(nn.Module):
         true_dist.scatter_(1, target.unsqueeze(1), self.confidence)
         kl = self.criterion(torch.log_softmax(x, dim=1), true_dist)
         denom = total if self.normalize_length else batch_size
-        return kl.masked_fill(ignore.unsqueeze(1), 0).sum() / denom
+
+        weights = weights.to(kl.device)
+        num_blocks = weights.shape[0]
+        kl = kl.masked_fill(ignore.unsqueeze(1), 0)
+        loss = torch.sum(kl.view(num_blocks, -1), dim=1) / denom * num_blocks
+        loss = torch.sum(weights * loss, dim=0)
+        return loss
