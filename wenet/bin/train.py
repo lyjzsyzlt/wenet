@@ -29,6 +29,7 @@ from torch.utils.data import DataLoader
 from wenet.dataset.dataset import AudioDataset, CollateFunc
 from wenet.transformer.asr_model import init_asr_model
 from wenet.utils.checkpoint import load_checkpoint, save_checkpoint
+from wenet.utils.common import init_logger
 from wenet.utils.executor import Executor
 from wenet.utils.scheduler import WarmupLR
 
@@ -37,6 +38,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='training your network')
     parser.add_argument('--config', required=True, help='config file')
     parser.add_argument('--train_data', required=True, help='train data file')
+    parser.add_argument('--log_path', required=True, help='log file')
     parser.add_argument('--cv_data', required=True, help='cv data file')
     parser.add_argument('--gpu',
                         type=int,
@@ -81,6 +83,7 @@ if __name__ == '__main__':
 
     logging.basicConfig(level=logging.DEBUG,
                         format='%(asctime)s %(levelname)s %(message)s')
+    log = init_logger(args.log_path)
     os.environ['CUDA_VISIBLE_DEVICES'] = str(args.gpu)
     # Set random seed
     torch.manual_seed(777)
@@ -161,7 +164,7 @@ if __name__ == '__main__':
     # Init asr model from configs
     model = init_asr_model(configs)
     num_parameters = sum(torch.numel(parameter) for parameter in model.parameters())
-    print('============参数量=============：', num_parameters / 1000000)
+    log.info('============参数量=============：%f' % (num_parameters / 1000000))
     # print(model)
 
     # !!!IMPORTANT!!!
@@ -210,6 +213,7 @@ if __name__ == '__main__':
 
     # Start training loop
     executor.step = step
+    executor.log = log  # 保存训练的log文件
     scheduler.set_step(step)
     for epoch in range(start_epoch, num_epochs):
         if distributed:
