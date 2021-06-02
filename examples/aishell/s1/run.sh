@@ -123,6 +123,7 @@ if [ ${stage} -le 4 ] && [ ${stop_stage} -ge 4 ]; then
         gpu_id=$(echo $CUDA_VISIBLE_DEVICES | cut -d',' -f$[$i+1])
         $python wenet/bin/train.py --gpu $gpu_id \
             --config $train_config \
+            --log_path $dir/train.log \
             --train_data $feat_dir/$train_set/format.data \
             --cv_data $feat_dir/dev/format.data \
             ${checkpoint:+--checkpoint $checkpoint} \
@@ -175,6 +176,7 @@ if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
             --dict $dict \
             --ctc_weight $ctc_weight \
             --result_file $test_dir/text \
+            --utt2dur $feat_dir/${recog_set}/utt2dur \
             ${decoding_chunk_size:+--decoding_chunk_size $decoding_chunk_size}
          $python tools/compute-wer.py --char=1 --v=1 \
             $feat_dir/${recog_set}/text $test_dir/text > $test_dir/wer
@@ -183,6 +185,7 @@ if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
          duration=`cat data/${recog_set}/utt2dur|awk '{sum+=$2}END{print sum}'`
          echo -e "\naverage rtf="`awk 'BEGIN{printf "%.4f\n",'${decoding_time}'/'${duration}'}'`
          echo -e "time costs="`awk 'BEGIN{printf "%.4f\n",'${decoding_time}'/60}'`
+         echo -e "$dir $recog_set $mode WER="`grep "Overall*" $test_dir/wer`
     }
     done
 fi
