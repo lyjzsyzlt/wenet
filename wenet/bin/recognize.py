@@ -77,6 +77,7 @@ if __name__ == '__main__':
     parser.add_argument('--simulate_streaming',
                         action='store_true',
                         help='simulate streaming inference')
+    parser.add_argument('--utt2dur', type=str, default='')
     args = parser.parse_args()
     print(args)
     logging.basicConfig(level=logging.DEBUG,
@@ -136,7 +137,7 @@ if __name__ == '__main__':
     model.eval()
     # 读取每个音频的时长
     duration={}
-    with open('data/test/utt2dur', 'r', encoding='utf-8') as ff:
+    with open(args.utt2dur, 'r', encoding='utf-8') as ff:
         for line in ff.readlines():
             line = line.strip()
             key, dur=line.split(' ')
@@ -193,8 +194,6 @@ if __name__ == '__main__':
                     simulate_streaming=args.simulate_streaming)
                 hyps = [hyp]
             end = time.time()
-
-
 
             for i, key in enumerate(keys):
                 content = ''
