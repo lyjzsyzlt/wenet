@@ -96,6 +96,16 @@ if [ ${stage} -le 3 ] && [ ${stop_stage} -ge 3 ]; then
     done
 fi
 if [ ${stage} -le 4 ] && [ ${stop_stage} -ge 4 ]; then
+    # Prevent existing experiment folders from being overwritten
+    if [ -d "$dir" ];then
+        echo "Warning: the $dir exists!!!"
+        read -p "Please input Y to continue..." flag
+        if [[ $flag == "Y" ]];then
+            echo "continue..."
+        else
+            exit 1
+        fi
+    fi
     # Training
     mkdir -p $dir
     INIT_FILE=$dir/ddp_init
