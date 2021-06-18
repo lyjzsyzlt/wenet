@@ -208,8 +208,8 @@ if __name__ == '__main__':
                     if w==eos or w==IGNORE_ID:
                         break
                     ref += char_dict[w]
-                logging.info('({}/{}) {} {}'.format(batch_idx, len(test_data_loader), key, content))
-                logging.info('({}/{}) {} {}'.format(batch_idx, len(test_data_loader), key, ref))
+                logging.info('({}/{}) {} {}'.format(batch_idx*args.batch_size + i, len(test_data_loader)*args.batch_size, key, content))
+                logging.info('({}/{}) {} {}'.format(batch_idx*args.batch_size + i, len(test_data_loader)*args.batch_size, key, ref))
                 logging.info('Decoding time: {} RTF: {}\n'.format(str(end-start), str((end-start)/float(duration[key]))))
                 fout.write('{} {}\n'.format(key, content))
                 decode_time.write('{} {}\n'.format(key, str(end-start)))
