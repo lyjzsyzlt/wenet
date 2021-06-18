@@ -28,6 +28,7 @@ from torch.utils.data import DataLoader
 from wenet.dataset.dataset import AudioDataset, CollateFunc
 from wenet.transformer.asr_model import init_asr_model
 from wenet.utils.checkpoint import load_checkpoint
+from wenet.utils.common import IGNORE_ID
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='recognize with your model')
@@ -204,7 +205,7 @@ if __name__ == '__main__':
                 ref = ''
                 for w in target[i]:
                     w=w.detach().item()
-                    if w==eos:
+                    if w==eos or w==IGNORE_ID:
                         break
                     ref += char_dict[w]
                 logging.info('({}/{}) {} {}'.format(batch_idx, len(test_data_loader), key, content))
