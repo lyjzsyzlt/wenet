@@ -187,6 +187,9 @@ if __name__ == '__main__':
 
     num_parameters = sum(torch.numel(parameter) for parameter in model.student.parameters())
     log.info('============参数量=============：%f'%(num_parameters / 1000000))
+    if teacher:
+        num_parameters = sum(torch.numel(parameter) for parameter in model.teacher.parameters())
+        log.info('============teacher参数量=============：%f' % (num_parameters / 1000000))
 
     # !!!IMPORTANT!!!
     # Try to export the model by script, if fails, we should refine
@@ -196,11 +199,11 @@ if __name__ == '__main__':
     executor = Executor()
     # If specify checkpoint, load some info from checkpoint
     if args.checkpoint is not None:
-        # infos = load_checkpoint(model.student, args.checkpoint)
-        infos = load_part_params(model.student, args.checkpoint)
+        infos = load_checkpoint(model.student, args.checkpoint)
+        # infos = load_part_params(model.student, args.checkpoint)
     else:
         infos = {}
-    if teacher is not None:
+    if teacher:
         load_checkpoint(model.teacher, os.path.join(teacher, 'avg_10.pt'))
         log.info("load teacher model %s successfully!"%(teacher+'/avg_10.pt'))
     else:

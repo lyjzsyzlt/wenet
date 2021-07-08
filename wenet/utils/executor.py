@@ -28,7 +28,7 @@ class Executor:
         num_seen_utts = 0
         num_total_batch = len(data_loader)
         for batch_idx, batch in enumerate(data_loader):
-            key, feats, target, feats_lengths, target_lengths = batch
+            key, feats, target, feats_lengths, target_lengths, ys = batch
             feats = feats.to(device)
             target = target.to(device)
             feats_lengths = feats_lengths.to(device)
@@ -50,7 +50,7 @@ class Executor:
                 loss, loss_att, loss_ctc = model(feats,
                                                  feats_lengths,
                                                  target,
-                                                 target_lengths)
+                                                 target_lengths, ys=ys, uttid=key)
                 loss = loss / accum_grad
                 loss.backward()
 
@@ -89,7 +89,7 @@ class Executor:
         num_total_batch = len(data_loader)
         with torch.no_grad():
             for batch_idx, batch in enumerate(data_loader):
-                key, feats, target, feats_lengths, target_lengths = batch
+                key, feats, target, feats_lengths, target_lengths, ys = batch
                 feats = feats.to(device)
                 target = target.to(device)
                 feats_lengths = feats_lengths.to(device)
@@ -98,11 +98,11 @@ class Executor:
                 if num_utts == 0:
                     continue
                 loss, loss_att, loss_ctc = model(feats, feats_lengths, target,
-                                                 target_lengths, cv=True)
+                                                 target_lengths, cv=True, ys=ys)
                 if torch.isfinite(loss):
                     num_seen_utts += num_utts
-                    # total_loss += loss.item() * num_utts
-                    total_loss += loss_att.item() * num_utts
+                    total_loss += loss.item() * num_utts
+                    # total_loss += loss_att.item() * num_utts
                 if batch_idx % log_interval == 0:
                     log_str = 'CV Batch {}/{} loss {:.6f} '.format(
                         batch_idx, num_total_batch, loss.item())

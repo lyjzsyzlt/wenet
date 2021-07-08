@@ -349,7 +349,7 @@ class CollateFunc(object):
         else:
             ys_pad = None
             ys_lengths = None
-        return keys, xs_pad, ys_pad, xs_lengths, ys_lengths
+        return keys, xs_pad, ys_pad, xs_lengths, ys_lengths, ys
 
 
 class AudioDataset(Dataset):

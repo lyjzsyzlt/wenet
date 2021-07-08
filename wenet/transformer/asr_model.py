@@ -292,6 +292,14 @@ class ASRModel(torch.nn.Module):
 
         # 3. Select best of best
         scores = scores.view(batch_size, beam_size)
+
+        # topk = torch.topk(scores, k=5, dim=-1)[1]
+        # best_hyps_index = topk + torch.arange(batch_size, dtype=torch.long, device=device).view(batch_size,
+        #                                                                                         1) * beam_size
+        # best_hyps = torch.index_select(hyps, dim=0, index=best_hyps_index.view(-1))
+        # best_hyps = best_hyps[:, 1:]
+        # return best_hyps.cpu().numpy().tolist()
+
         # TODO: length normalization
         best_index = torch.argmax(scores, dim=-1).long()
         best_hyps_index = best_index + torch.arange(
@@ -673,6 +681,7 @@ class ASRModel(torch.nn.Module):
                                                beam_size, decoding_chunk_size,
                                                num_decoding_left_chunks,
                                                simulate_streaming)
+        return [list(xx[0]) for xx in hyps]
         return hyps[0][0]
 
     def attention_rescoring(

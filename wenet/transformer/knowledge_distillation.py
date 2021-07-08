@@ -1,9 +1,11 @@
+import random
+import numpy as np
 import torch
 import torch.nn as nn
+from torch.nn.utils.rnn import pad_sequence
 
 from wenet.transformer.asr_model import init_asr_model
 from wenet.utils.common import IGNORE_ID, add_sos_eos
-
 
 class KD(nn.Module):
     def __init__(self, configs_student, configs_teacher=None):
@@ -15,9 +17,9 @@ class KD(nn.Module):
         '''
 
         super(KD, self).__init__()
-        self.student = init_asr_model(configs_student)
+        self.student = init_asr_model(configs_student, teacher=True)
         if configs_teacher is not None:
-            self.teacher = init_asr_model(configs_teacher)
+            self.teacher = init_asr_model(configs_teacher, teacher=True)
             self.teacher.eval()
             for _, p in self.teacher.named_parameters():
                 p.requires_grad = False
@@ -27,24 +29,53 @@ class KD(nn.Module):
         self.kd_config = configs_student['kd_conf']
         self.sos = configs_student['output_dim']
         self.eos = configs_student['output_dim']
-        # self.v = torch.nn.ModuleList([torch.nn.Linear(256,1) for _ in range(self.student.decoder.num_blocks)])
+        self.cache = {}  # 记录解码的结果
+        with open('fbank/train_sp/rescoring_top5.txt', 'r', encoding='utf-8') as f:
+            for line in f.readlines():
+                line = line.strip()
+                uttid = line.split(' ')[0]
+                content = line.split(' ')[1:]
+                if uttid not in self.cache:
+                    self.cache[uttid] = []
+                    self.cache[uttid].append([int(xx) for xx in content])
+                else:
+                    self.cache[uttid].append([int(xx) for xx in content])
 
-    def forward(self, feats, feats_lengths, target, target_lengths, cv=False):
+    def forward(self, feats, feats_lengths, target, target_lengths, cv=False, ys=None, uttid=None):
         if cv:
             self.student.eval()
+            loss_hard, loss_att, loss_ctc, encoder_out_s, encoder_mask, logits_s, dec_outputs_s = self.student(feats,
+                                                                                                               feats_lengths,
+                                                                                                               target,
+                                                                                                               target_lengths)
+            return loss_hard, loss_att, loss_ctc
+
         else:
             self.student.train()
-        loss_hard, loss_att, loss_ctc, encoder_out_s, encoder_mask, logits_s, dec_outputs_s = self.student(feats,
-                                                                                                           feats_lengths,
-                                                                                                           target,
-                                                                                                           target_lengths)
 
         if self.teacher is not None:
             self.teacher.eval()
             with torch.no_grad():
                 loss1, _, _, encoder_out_t, _, logits_t, dec_outputs_t = self.teacher(feats, feats_lengths, target,
-                                                                                  target_lengths)
-
+                                                                                      target_lengths)
+                if random.random() > 0.0:
+                    target_np = ys
+                    # 选取20%的句子进行解码
+                    import math
+                    index = random.sample(range(0, feats.shape[0]), math.ceil(feats.shape[0] * 0.2))
+                    for i in index:
+                        # topk中选择一个作为标签
+                        id = random.randint(0, 4)
+                        assert len(self.cache[uttid[i]]) == 5
+                        target_np[i] = self.cache[uttid[i]][id]
+                        target_lengths[i] = len(target_np[i])
+                    target = pad_sequence([torch.from_numpy(np.array(y)).int() for y in target_np],
+                                          True, IGNORE_ID)
+                    target = target.cuda()
+            loss_hard, loss_att, loss_ctc, encoder_out_s, encoder_mask, logits_s, dec_outputs_s = self.student(feats,
+                                                                                                               feats_lengths,
+                                                                                                               target,
+                                                                                                               target_lengths)
             # PKD
             if self.kd_config['method'] == 'PKD':
                 if self.kd_config['encoder']['kd']:
@@ -98,8 +129,13 @@ class KD(nn.Module):
                 loss_mlfd = alpha * loss_mlfd_e + beta * loss_mlfd_d
                 loss = loss_hard + loss_mlfd
                 return loss, loss_hard, loss_mlfd
+        else:
+            loss_hard, loss_att, loss_ctc, encoder_out_s, encoder_mask, logits_s, dec_outputs_s = self.student(feats,
+                                                                                                                feats_lengths,
+                                                                                                                target,
+                                                                                                                target_lengths)
 
-        return loss_hard, loss_att, loss_ctc
+            return loss_hard, loss_att, loss_ctc
 
     def PKD(self, output_s, output_t, index, mask=None):
         """
@@ -142,8 +178,10 @@ class KD(nn.Module):
         T = output_s[0].shape[1]
         D = output_s[0].shape[2]
 
-        output_t = [output_t[i].masked_fill(~mask.transpose(1, 2), 0.0) for i in range(tlayer)]  # enc_states ([batch, Tmax, dm])
-        output_t = [output_t[i] / torch.norm(output_t[i], p=p, dim=(1, 2)).unsqueeze(1).unsqueeze(2) for i in range(tlayer)]
+        output_t = [output_t[i].masked_fill(~mask.transpose(1, 2), 0.0) for i in
+                    range(tlayer)]  # enc_states ([batch, Tmax, dm])
+        output_t = [output_t[i] / torch.norm(output_t[i], p=p, dim=(1, 2)).unsqueeze(1).unsqueeze(2) for i in
+                    range(tlayer)]
         output_t = torch.cat(output_t, dim=0)
 
         output_s = [output_s[i].masked_fill(~mask.transpose(1, 2), 0.0) for i in
@@ -162,10 +200,10 @@ class KD(nn.Module):
             # output_t = torch.matmul(score, t).transpose(0, 2).transpose(1, 2).reshape(slayer, -1, T, D)
 
             # 分块进行attention
-            res=[]
+            res = []
             for i in range(slayer):
-                s=output_s.view(slayer, -1, T, D)[i].unsqueeze(0).transpose(0, 1).transpose(1, 2)
-                t=output_t.view(tlayer, -1, T, D)[index[i]].transpose(0, 1).transpose(1, 2)
+                s = output_s.view(slayer, -1, T, D)[i].unsqueeze(0).transpose(0, 1).transpose(1, 2)
+                t = output_t.view(tlayer, -1, T, D)[index[i]].transpose(0, 1).transpose(1, 2)
                 score = torch.matmul(s, t.transpose(-2, -1))
                 score = torch.softmax(score, dim=-1)
                 res.append(torch.matmul(score, t).transpose(0, 2).transpose(1, 2).reshape(-1, T, D))
@@ -182,22 +220,22 @@ class KD(nn.Module):
                         2)).masked_fill(~mask.transpose(1, 2), 0.0).sum() / (batch * slayer)
             return loss
         elif attn_type == 'add':
-            res=[]
+            res = []
             for i in range(slayer):
-                if len(index[i])==1:
+                if len(index[i]) == 1:
                     s = output_s.view(slayer, -1, T, D)[i].unsqueeze(0).unsqueeze(1).repeat(1, len(index[i]), 1, 1, 1)
                     t = output_t.view(tlayer, -1, T, D)[index[i]].unsqueeze(0).unsqueeze(0)
                     score = self.v[i](s + t)
                     score = torch.softmax(score, dim=1)
-                    t = output_t.view(tlayer,-1,T,D)[index[i]].unsqueeze(0).unsqueeze(0)
-                    res.append(torch.sum(score*t,dim=1).view(-1, T, D))
+                    t = output_t.view(tlayer, -1, T, D)[index[i]].unsqueeze(0).unsqueeze(0)
+                    res.append(torch.sum(score * t, dim=1).view(-1, T, D))
                 else:
                     s = output_s.view(slayer, -1, T, D)[i].unsqueeze(0).unsqueeze(1).repeat(1, len(index[i]), 1, 1, 1)
                     t = output_t.view(tlayer, -1, T, D)[index[i]].unsqueeze(0)
                     score = self.v[i](s + t)
                     score = torch.softmax(score, dim=1)
                     t = output_t.view(tlayer, -1, T, D)[index[i]].unsqueeze(0)
-                    res.append(torch.sum(score*t,dim=1).view(-1, T, D))
+                    res.append(torch.sum(score * t, dim=1).view(-1, T, D))
             output_t = torch.cat(res, dim=0).view(slayer, -1, T, D)
 
             criterion = nn.MSELoss(reduce=False, size_average=False)
@@ -222,12 +260,9 @@ class KD(nn.Module):
         criterion = nn.KLDivLoss(reduction="none")
         batch = logits_s.shape[0]
         vocab_size = logits_s.shape[2]
-        logits_s = logits_s.view(-1, vocab_size) # (B x T) x Vocab_size
-        logits_t = logits_t.view(-1, vocab_size) # (B x T) x Vocab_size
+        logits_s = logits_s.view(-1, vocab_size)  # (B x T) x Vocab_size
+        logits_t = logits_t.view(-1, vocab_size)  # (B x T) x Vocab_size
 
         loss = criterion(torch.log_softmax(logits_s, dim=1), logits_t)
-        loss = loss.masked_fill(mask, 0).sum()/batch
+        loss = loss.masked_fill(mask, 0).sum() / batch
         return loss
-
-
-

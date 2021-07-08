@@ -165,10 +165,12 @@ if __name__ == '__main__':
     path = '/'.join(args.result_file.split('/')[:-1]) + "/decoding_time"
     decode_time = open(path, 'w', encoding='utf-8')
 
+    name='/'.join(args.test_data.split('/')[:-1])+"/decode_res.txt"
+    tmp=open(name,'w',encoding='utf-8')
     with torch.no_grad(), open(args.result_file, 'w') as fout:
         for batch_idx, batch in enumerate(test_data_loader):
             start = time.time()
-            keys, feats, target, feats_lengths, target_lengths = batch
+            keys, feats, target, feats_lengths, target_lengths,_ = batch
             feats = feats.to(device)
             target = target.to(device)
             feats_lengths = feats_lengths.to(device)
@@ -182,6 +184,12 @@ if __name__ == '__main__':
                     num_decoding_left_chunks=args.num_decoding_left_chunks,
                     simulate_streaming=args.simulate_streaming)
                 hyps = [hyp.tolist() for hyp in hyps]
+                # for i, key in enumerate(keys):
+                #     for j in range(5):
+                #         print(key," ", hyps[i*5+j])
+                #         tmp.write(key+" "+str(hyps[i*5+j])+"\n")
+                #         # print(key," ", [char_dict[x] for x in hyps[i*5+j] if x!=eos])
+                # continue
             elif args.mode == 'ctc_greedy_search':
                 hyps = model.ctc_greedy_search(
                     feats,
