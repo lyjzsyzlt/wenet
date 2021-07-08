@@ -161,3 +161,18 @@ def init_logger(log_file=None):
         logger.addHandler(file_handler)
 
     return logger
+
+def idx2char(idx_list):
+    char_dict = {}
+    with open('/home/lvyongjie/work/wenet/examples/aishell/s1/data/dict/lang_char.txt', 'r') as fin:
+        for line in fin:
+            arr = line.strip().split()
+            assert len(arr) == 2
+            char_dict[int(arr[1])] = arr[0]
+    for i in range(len(idx_list)):
+        content = ''
+        for w in idx_list[i]:
+            if w==-1:
+                break
+            content += char_dict[w]
+        print(content)
